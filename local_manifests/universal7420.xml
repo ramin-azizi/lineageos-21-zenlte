@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<manifest>
+    <!--Device Trees-->
+    <project path="device/samsung/universal7420-common" name="samsungexynos7420/android_device_samsung_universal7420-common" remote="github" revision="lineage-21.0-unify"/>
+    <project path="device/samsung/zenlte" name="samsungexynos7420/android_device_samsung_zenlte" remote="github" revision="lineage-20.0-unify"/>
+
+    <!--Kernel-->
+    <project path="kernel/samsung/universal7420" name="samsungexynos7420/android_kernel_samsung_universal7420" remote="github" revision="lineage-21.0-unify" />
+
+    <!-- Vendor folders -->
+    <project path="vendor/samsung" name="samsungexynos7420/proprietary_vendor_samsung" remote="github" revision="lineage-21.0-unify" />
+
+    <!-- Hardware -->
+    <project path="hardware/samsung" name="LineageOS/android_hardware_samsung" remote="github" revision="lineage-21" />
+    <project name="LineageOS/android_device_samsung_slsi_sepolicy" path="device/samsung_slsi/sepolicy" revision="lineage-21" remote="github" />
+
+    <!-- Linaro BSP -->
+    <project path="hardware/samsung_slsi-linaro/exynos" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_exynos" remote="github" revision="lineage-21.0" />
+    <project path="hardware/samsung_slsi-linaro/exynos5" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_exynos5" remote="github" revision="lineage-21.0"/>
+    <project path="hardware/samsung_slsi-linaro/openmax" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_openmax" remote="github" revision="lineage-21.0" />
+    <project path="hardware/samsung_slsi-linaro/graphics" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_graphics" remote="github" revision="lineage-21.0" />
+    <project path="hardware/samsung_slsi-linaro/config" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_config" remote="github" revision="lineage-21.0" />
+    <project path="hardware/samsung_slsi-linaro/codec2" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_codec2" remote="github" revision="lineage-21" />
+    <project path="hardware/samsung_slsi-linaro/interfaces" name="samsungexynos7420/android_hardware_samsung_slsi-linaro_interfaces" remote="github" revision="lineage-21.0" />
+
+</manifest>
