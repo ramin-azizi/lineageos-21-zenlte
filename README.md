@@ -14,11 +14,14 @@ sha256: 4590053278eecf979c1f0549d7dd94ae3bcb3e83da3b58b9922ba7387b730157
 
 ## ⚠️ Read this first
 
-This is a build of a community port on a phone from 2015. **It has been confirmed
-to flash and install**, but treat everything beyond that as unverified. It has
-not been verified to boot. Flashing replaces your OS and **wipes your data**.
-Back up first, and keep a known-good recovery path — do not wipe your only way
-back until this has booted successfully for you.
+This is a build of a community port on a phone from 2015. **The ROM has been
+confirmed to install successfully** via TWRP.
+Everything past that point is unverified — boot, radio, camera, and sensors have
+not been independently confirmed, and no OTA path is provided.
+
+Flashing replaces your OS and **wipes your data**. Back up first, and keep a
+known-good recovery path — do not wipe your only way back until this has booted
+successfully for you.
 
 No warranty. You are responsible for your own device.
 
