@@ -14,7 +14,8 @@ sha256: 4590053278eecf979c1f0549d7dd94ae3bcb3e83da3b58b9922ba7387b730157
 
 ## ⚠️ Read this first
 
-This is an **untested** build of a community port on a phone from 2015. It has
+This is a build of a community port on a phone from 2015. **It has been confirmed
+to flash and install**, but treat everything beyond that as unverified. It has
 not been verified to boot. Flashing replaces your OS and **wipes your data**.
 Back up first, and keep a known-good recovery path — do not wipe your only way
 back until this has booted successfully for you.
@@ -25,12 +26,43 @@ No warranty. You are responsible for your own device.
 
 The S6 Edge+ is a Samsung — it uses **download mode, not fastboot**.
 
-Odin cannot flash raw `.img` files; it needs `.tar`/`.tar.md5`. Heimdall flashes
-`.img` directly.
+**Odin cannot flash raw `.img` files** — it needs `.tar`/`.tar.md5`, with the
+image at the archive root so Odin can identify the target partition. A ready-made
+`recovery.tar.md5` is attached to the release; flash it in the **AP** slot, and
+**untick "Auto Reboot"** so you can boot straight into the new recovery instead of
+letting the phone boot to system first. Heimdall flashes `recovery.img` directly
+with no repacking.
+
+### Known: MindTheGapps fails in TWRP with "error 1"
+
+Reported on this build: the **ROM itself installs fine in TWRP**, but
+`MindTheGapps-14-arm64` aborts with a generic error 1.
+
+Ruled out as causes — measured, not guessed:
+- **Not disk space.** `system.img` is a sparse image of 762,700 × 4096 =
+  3,123,916,800 bytes, i.e. the ext4 filesystem is created at the full
+  `BOARD_SYSTEMIMAGE_PARTITION_SIZE` (3,124,019,200), not shrunk to content.
+  With ~2.1 GiB of content that leaves roughly **820 MB free** in `/system`.
+- **Not an architecture mismatch.** The build is `TARGET_ARCH=arm64`, Android 14,
+  SDK 34 — so MindTheGapps 14 arm64 is the correct package.
+
+The likely cause is the recovery. This device has **no separate `product` or
+`system_ext` partition** — the fstab has only `SYSTEM`, and `product`/`system_ext`
+are directories inside it. MindTheGapps for Android 13+ expects to mount and write
+those paths, and older TWRP builds frequently fail there.
+
+LineageOS's own documented method is `adb sideload` from **LineageOS Recovery**
+(`recovery.img`, attached to the release, version-matched to this ROM). If you
+still hit it there, `/tmp/recovery.log` names the real cause — the line above the
+abort is the useful one, and note the log spans the whole recovery session, so
+check timestamps before blaming the most recent error you see.
+
+GApps must go on **before the first boot** of the ROM. If you have already booted,
+reflash the ROM and GApps in one session from a clean format.
 
 1. **Back up everything.**
-2. Flash `recovery.img` (attached to the release) to the RECOVERY partition via
-   Heimdall, or repack it as `.tar.md5` for Odin.
+2. Flash `recovery.tar.md5` in Odin's **AP** slot (Auto Reboot off), or
+   `recovery.img` via Heimdall.
 3. Boot **straight into recovery** — do not let the phone boot to system in
    between, or stock Android may restore its own recovery.
 4. Factory reset / format data.
