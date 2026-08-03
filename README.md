@@ -91,6 +91,36 @@ and the build contains no `install-recovery.sh` / `recovery-from-boot.p`, so
 nothing restores a different recovery on first boot. The `recovery.img` inside
 the zip is carried for reference and is not flashed.
 
+### If you flash TWRP from inside TWRP, pick `Recovery` — never `Boot`
+
+Odin puts the image where it belongs, so this only applies to **Install → Install
+Image** inside TWRP, where you choose the target partition yourself and `Boot`
+sits next to `Recovery` in the list. The sizes, read off an SM-G928F:
+
+| | bytes | |
+|---|---:|---|
+| `BOOT` → `sda5` | 29,360,128 | **image does not fit — 4.6 MB too big** |
+| `RECOVERY` → `sda6` | 35,651,584 | fits, 1.7 MB to spare |
+| `twrp-zenlte-v3-hardened-20260803.img` | 33,939,472 | |
+
+A truncated image on `boot` leaves nothing bootable, and the phone falls back to
+recovery on every start — which reads as a "recovery bootloop" even though system
+is untouched. Recover by flashing a good `boot.img` (it is inside the ROM zip),
+not by wiping anything. The sister project for the Moto G5S Plus hit exactly this.
+
+To confirm what is actually on the recovery partition, hash it with the image's
+**exact byte length** — `dd` with a 512-byte block size silently reads short here,
+because 33,939,472 is not a multiple of 512:
+
+```bash
+adb shell 'head -c 33939472 /dev/block/sda6 | sha256sum'
+# 8d0f945021c1d6cf60d1ba49c0e39c1663126745f9ff1b3b341cdd78b4a5fc3d
+```
+
+The TWRP version string cannot tell the two builds apart — both report
+`3.7.1_12-0`. Use the kernel date instead: `adb shell cat /proc/version` says
+**1 Aug 17:38** for the earlier build and **3 Aug 04:01** for the hardened one.
+
 ### If you prefer LineageOS Recovery
 
 `recovery.img` and `recovery.tar.md5` — the LineageOS recovery built from this
