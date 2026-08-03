@@ -1,0 +1,40 @@
+From: zenlte local fix (v3)
+Subject: [PATCH] fs_mgr: stop requesting extra_attr/project_quota when formatting f2fs
+
+Apply in: src/system/core
+
+fs_mgr_do_format() sets `bool needs_projid = true;` unconditionally, so
+format_f2fs() always appended "-O project_quota,extra_attr" to the make_f2fs
+command line.  extra_attr is the feature bit that panics this device's 3.10
+kernel (see patch 0002).
+
+Defence in depth: make_f2fs now masks these bits off regardless, but fs_mgr
+should not be asking for them in the first place.  The ext4 path is
+deliberately left untouched -- ext4 works today and is the default.
+
+diff --git a/fs_mgr/fs_mgr_format.cpp b/fs_mgr/fs_mgr_format.cpp
+index 8e7615010..7f0e7a50b 100644
+--- a/fs_mgr/fs_mgr_format.cpp
++++ b/fs_mgr/fs_mgr_format.cpp
+@@ -139,10 +139,17 @@ static int format_f2fs(const std::string& fs_blkdev, uint64_t dev_sz, bool needs
+     std::string block_size = std::to_string(getpagesize());
+ 
+     std::vector<const char*> args = {"/system/bin/make_f2fs", "-g", "android"};
+-    if (needs_projid) {
+-        args.push_back("-O");
+-        args.push_back("project_quota,extra_attr");
+-    }
++    // zenlte (Exynos7420) local change -- DEVICE SPECIFIC.
++    // This device's 3.10 kernel has the pre-4.14 fixed struct f2fs_inode with
++    // no i_extra_isize and knows only the ENCRYPT/BLKZONED feature bits.
++    // Formatting with extra_attr makes mkfs place block pointers at
++    // i_addr[extra_isize] while the kernel reads i_addr[0], so the kernel
++    // consumes inode metadata as block addresses and panics in
++    // update_sit_entry().  needs_projid is a hardcoded `true` above, so this
++    // request must be suppressed here rather than at the call site.
++    // make_f2fs masks these bits off anyway (external/f2fs-tools), but do not
++    // ask for them in the first place.
++    (void)needs_projid;
+     if (needs_casefold) {
+         args.push_back("-O");
+         args.push_back("casefold");

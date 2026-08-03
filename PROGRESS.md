@@ -1,6 +1,8 @@
 # S6 Edge+ (zenlte) LineageOS 21 Build — Progress
 
-**Status: VINTF FCM-level build failure at 77% diagnosed and FIXED (2026-08-01). Build restarted. Read the FCM block below before touching `device/samsung/zenlte/manifest.xml`.**
+**Status (2026-08-02): v1 built OK but bootlooped on hardware — f2fs kernel panic on /data and /cache. Fixed by dropping the f2fs fstab entries; v2 full rebuild in progress. See the 2026-08-02 section at the end of this file — and note that zenlte uses the `.noble` fstab, not `.zero`.**
+
+**Earlier status: VINTF FCM-level build failure at 77% diagnosed and FIXED (2026-08-01). Read the FCM block below before touching `device/samsung/zenlte/manifest.xml`.**
 
 ## HANDOVER — VINTF FCM level mismatch at 77% — FIXED (2026-08-01)
 
@@ -397,7 +399,7 @@ Phase 1 recon, environment setup, and the original C:->D: disk relocation handov
    in the arm64 and arm prebuilt repos.
 
 3. **18% `build-manifest.xml`** — `repo manifest` failed with
-   "OSError: [Errno 30] Read-only file system: '/home/<user>/.repo_.gitconfig.json'".
+   "OSError: [Errno 30] Read-only file system: '/home/ramin/.repo_.gitconfig.json'".
    NOT a disk fault: /home is rw, no ext4 errors. This is the AOSP build sandbox,
    which mounts / read-only and binds only /tmp and the source/out dirs rw.
    Root cause: step 2's `git lfs install` added `filter.lfs.*` entries to
@@ -426,3 +428,345 @@ Total across all runs this session: 162,274 targets.
 
 No md5sum file was generated (`.zip.md5sum` absent) -- LineageOS 21 does not
 produce one by default. Verify by size/sha256 if copying to another machine.
+
+---
+
+## 2026-08-02 — f2fs kernel panic on /data and /cache — FIXED (v2 build)
+
+### The failure (observed on real hardware, not speculation)
+
+The v1 ROM from 2026-08-01 bootlooped on every boot. Kernel log:
+
+```
+Kernel panic - not syncing: Fatal exception
+PC is at update_sit_entry+0x68/0x354
+Call trace: update_sit_entry / refresh_sit_entry / allocate_data_block /
+  f2fs_write_data_pages / write_checkpoint / f2fs_sync_fs / f2fs_sync_file /
+  SyS_fdatasync
+```
+
+This is the 3.10 Exynos7420 kernel's f2fs implementation dying inside the
+segment-info-table update during a checkpoint write. Any `fdatasync()` on an
+f2fs mount can trigger it, so the device panics as soon as early boot does real
+I/O on `/data`.
+
+### Why a factory reset could not fix it
+
+`fs_mgr` walks the fstab in order and formats/mounts the **first** entry matching
+a mount point. Both `/cache` and `/data` listed **f2fs first**, ext4 second, so
+every wipe reformatted both partitions straight back to f2fs. Hand-converting
+both to ext4 on the device made it boot reliably — confirming the diagnosis and
+the fix.
+
+### The fix
+
+Deleted the two f2fs lines (`/cache` and `/data`) from the universal7420 fstabs,
+leaving the pre-existing ext4 entries as the only match. **ext4 flags were not
+otherwise touched.**
+
+### IMPORTANT — zenlte uses the `.noble` fstab, NOT `.zero`
+
+This is easy to get wrong and was initially mis-stated in the task brief.
+`BoardConfigCommon.mk:155` and `ramdisk/Android.mk:6` both switch on the same
+device filter:
+
+```
+ifneq ($(filter noblelte ... zenlte zenltecan ... zenltezt,$(TARGET_DEVICE)),)
+  -> fstab.samsungexynos7420.noble
+else
+  -> fstab.samsungexynos7420.zero
+endif
+```
+
+`zenlte` (PRODUCT_DEVICE in `lineage_zenlte.mk:32`, SM-G928F) is **inside** that
+list, so it takes the `.noble` branch. Line 158's `.zero` assignment is the
+`else` branch and is dead code for this device. The same conditional governs
+both `TARGET_RECOVERY_FSTAB` (recovery.fstab) and the `fstab.samsungexynos7420`
+prebuilt installed to `/vendor/etc`, so one file drives both the ROM's runtime
+fstab and recovery's — patching `.noble` fixes the ROM/recovery disagreement
+that the hand-patched v1 phone had.
+
+Both variants were patched anyway: `.noble` because it is what zenlte actually
+builds (required), `.zero` because it carries the identical bug for the
+zero-family (zeroflte/zerolte) devices and was explicitly requested. Patching
+`.zero` is a no-op for this build.
+
+Patch saved at `7420_patches_local/0001-fstab-drop-f2fs-for-data-and-cache.patch`
+(apply with `git apply` from `src/device/samsung/universal7420-common`).
+**NOTE: repo-managed tree — a future `repo sync` will discard this**, same
+caveat as the manifest.xml FCM fix above.
+
+### Acceptance criterion
+
+Built `out/target/product/zenlte/recovery/root/system/etc/recovery.fstab` must
+contain **zero** f2fs lines for `/data` and `/cache`.
+
+### Pre-build verification (both still in place, tree was not re-synced)
+
+- `device/samsung/zenlte/manifest.xml` — `target-level="5"` confirmed.
+- `external/chromium-webview/prebuilt/arm64/webview.apk` — 262,187,199 bytes
+  (real APK, not a 134-byte LFS pointer). arm variant 95,283,023 bytes.
+
+### v2 BUILD COMPLETE — 2026-08-03T01:32:02Z, rc=0
+
+Full build from an empty `out/`: 22:43:44Z -> 01:32:02Z (2h 48m), 180,457 ninja
+targets, **0 FAILED targets**.
+
+**Acceptance criterion PASSED — the fix is in the artifact.** Both generated
+fstabs contain zero f2fs lines; `/cache` and `/data` are ext4-only:
+
+- `out/target/product/zenlte/recovery/root/system/etc/recovery.fstab` — no f2fs
+- `out/target/product/zenlte/system/vendor/etc/fstab.samsungexynos7420` — no f2fs
+  (note: this device is non-Treble, so the vendor fstab lands under
+  `system/vendor/etc`, NOT `vendor/etc` — the latter does not exist)
+
+Recovery and ROM now agree on ext4, which the hand-patched v1 phone did not.
+
+Artifacts copied to `/mnt/rom-data/artifacts/zenlte-v2/` with `SHA256SUMS.txt`:
+
+```
+aefd9dd2faec1323d3ddcf3c7177bfacf3947f41f0e20adcf246ff0c8af92ec1  lineage-21.0-20260802-UNOFFICIAL-zenlte.zip   893,798,998 B
+62e1a9580e1e8ecf4a8472272f877ed57650d41fdf69dd6ed4238213784aa285  recovery.img                                   31,674,384 B
+4a219db890307e172a1aa9c332757ada8190902d761aac18cd8fe5a1306688a8  boot.img                                       24,809,488 B
+```
+
+Log: `logs/build_20260802T224344Z.log`. Disk after build: 339 GB free.
+
+**Flashing note (not done here — user flashes):** because `/data` and `/cache`
+are currently f2fs-formatted on the phone from the hand-patch era, or may be, the
+new recovery will now format them ext4. Nothing was flashed and nothing was
+pushed to GitHub by this session.
+
+---
+
+# v3 — fix the f2fs bug at its root (2026-08-03)
+
+v2 shipped ext4 and *avoided* f2fs. v3 fixes the actual defect and restores
+f2fs as a working option, with ext4 kept as the default for safety.
+
+## Root cause, restated
+
+Two independent things had to be true for the panic, and both were:
+
+1. **The formatter wrote a filesystem the kernel cannot parse.**
+   `external/f2fs-tools` is 1.16.0. Invoked as `make_f2fs -g android` it enabled
+   `EXTRA_ATTR` (0x0008) plus `PRJQUOTA`/`QUOTA_INO`/`VERITY`. The zenlte kernel
+   is 3.10 and knows only `ENCRYPT` (0x0001) and `BLKZONED` (0x0002)
+   — `kernel/.../include/linux/f2fs_fs.h:112-113` — and its `struct f2fs_inode`
+   is the pre-4.14 fixed layout with **no `i_extra_isize`**.
+   f2fs has no incompatible-feature gate, so the old kernel mounted it anyway.
+   With `EXTRA_ATTR`, mkfs places block pointers at `i_addr[get_extra_isize()]`
+   while the kernel reads `i_addr[0]` — so the kernel consumed *inode metadata
+   as block addresses*.
+
+2. **The kernel trusted those addresses without bounds-checking them.**
+   `GET_SEGNO()` → `get_seg_entry()` → `&sit_i->sentries[segno]` with no check
+   at all, ~700x out of bounds → the observed
+   `update_sit_entry+0x68/0x354` paging-request panic on the first `fdatasync()`.
+
+Corroboration: TWRP ships f2fs-tools **1.14.0**, whose `CONF_ANDROID` does not
+set `EXTRA_ATTR` — which is exactly why TWRP-formatted f2fs worked.
+
+## IMPORTANT — the brief's fix #1 alone would NOT have worked
+
+Fixing only the `CONF_ANDROID` defaults leaves the bug fully intact, because
+**both callers request the killer feature explicitly on the command line**:
+
+- `system/core/fs_mgr/fs_mgr_format.cpp` — `fs_mgr_do_format()` sets
+  `bool needs_projid = true;` unconditionally, so `format_f2fs()` always appends
+  `-O project_quota,extra_attr`.
+- `bootable/recovery/recovery_utils/roots.cpp` — `format_volume()` hardcodes the
+  same `-O project_quota,extra_attr`.
+
+So the authoritative fix is a **mask applied after getopt and after the
+defaults** in `f2fs_parse_options()`, which catches every caller regardless of
+what it asked for. The two callers were fixed as well (defence in depth), but
+the mask is what actually guarantees it.
+
+Also checked and cleared: `Android.bp` defines `-DCONF_CASEFOLD -DCONF_PROJID`
+(which re-add `EXTRA_ATTR` outside the switch) **only** for the host-only
+`make_f2fs_casefold` binary, not the on-device `make_f2fs`. No f2fs images are
+built by this device (`BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4`).
+
+## Changes (patches 0002–0006 in `7420_patches_local/`)
+
+| # | Tree | Change |
+|---|------|--------|
+| 0002 | `external/f2fs-tools` | CONF_ANDROID keeps only ENCRYPT; **authoritative post-getopt feature mask** |
+| 0003 | `system/core` | fs_mgr stops requesting `extra_attr`/`project_quota` for f2fs |
+| 0004 | `bootable/recovery` | recovery stops requesting the same |
+| 0005 | `device/samsung/universal7420-common` | f2fs restored for `/data` + `/cache`, **listed after ext4** |
+| 0006 | `kernel/samsung/universal7420` | SIT bounds checks, checkpoint sanity check, `CONFIG_F2FS_CHECK_FS` off |
+
+`0005` **supersedes `0001`** (which deleted the f2fs lines outright) — do not
+apply both.
+
+### Kernel hardening detail (0006)
+
+- **`update_sit_entry()` bounds check — landed.** The most valuable change and
+  the exact panic site. Returns early on `NULL_SEGNO`; refuses with
+  `SBI_NEED_FSCK` when `segno >= MAIN_SEGS(sbi)`.
+- **`sanity_check_ckpt()` — landed**, adapted from upstream `15d3042a937c`
+  (CVE-2017-10663). Adapted, not applied blind: `MAIN_SEGS()`/`SM_I()` are not
+  usable there (segment manager isn't built until *after* `get_valid_checkpoint()`),
+  so the raw superblock `segment_count_main` is used, as upstream does.
+  `sbi->blocks_per_seg` *is* valid there because `init_sb_info()` (super.c:1956)
+  runs before `get_valid_checkpoint()` (super.c:1977).
+- **`build_sit_entries()` SIT-journal bounds check — landed**, in the spirit of
+  `b2ca374f33bd`. **This exposed a second, real, independent OOB bug**: the main
+  SIT loop is bounded by `start < MAIN_SEGS(sbi)`, but the journal loop below took
+  the segno straight from disk and indexed `sentries[]` unchecked.
+  `check_block_count()` is too late — the bad pointer is already formed.
+  Function changed `void` → `int` so the mount fails cleanly.
+- **`CONFIG_F2FS_CHECK_FS=y` → not set — judgement call, landed.** With it on,
+  `f2fs_bug_on()` is a bare `BUG_ON()`, i.e. f2fs *deliberately panics* on any
+  detected inconsistency — which flatly contradicts the "never panic" goal and
+  would have kept panicking even with the bounds checks (e.g. the `new_vblocks`
+  assertion a few lines below the fix). Off = `WARN_ON()` +
+  `SBI_NEED_FSCK`, the upstream/AOSP production setting. Easiest change to
+  revert: one line in `exynos7420-zenlte_defconfig`.
+
+Nothing was skipped for being unadaptable.
+
+## Empirical proof of the root-cause fix (not just a source grep)
+
+Host `make_f2fs` was built and run with the **exact fs_mgr command line** against
+a 4 GB image:
+
+```
+$ make_f2fs -g android -O project_quota,extra_attr -w 4096 -b 4096 img.bin 1048576
+Info: zenlte: dropping f2fs feature bits 0x0098 unsupported by this device's 3.10 kernel
+...
+Info: format successful
+```
+
+`0x0098` = `QUOTA_INO|PRJQUOTA|EXTRA_ATTR` — i.e. without the mask the on-disk
+`feature` would have been `0x0099` and the kernel would have panicked.
+Parsing the resulting superblock (offset validated by checking
+`magic=0xf2f52010` and `root/node/meta_ino = 3/1/2`):
+
+```
+feature offset = 2180
+feature = 0x0001   -> ENCRYPT only
+EXTRA_ATTR set?          False
+only kernel-known bits?  True
+```
+
+(The first attempt at this parse used a wrong offset — 2188 — and reported
+`feature = 0x0000`. The offset chain was then validated independently against
+`magic = 0xf2f52010` and `root/node/meta_ino = 3/1/2`, which located `feature`
+at 2180. The `version` string sits immediately before it, confirming the spot.)
+
+## v3 BUILD COMPLETE — 2026-08-03T03:19:12Z, rc=0
+
+Incremental from the v2 `out/`: 02:22:32Z → 03:19:12Z (**57 min**, vs 2h48m cold),
+**0 FAILED targets**. A second unrelated build (`sanders-los22-build`) was running
+concurrently and competing for CPU.
+
+### Acceptance criteria — each verified, none assumed
+
+**1. `grep -c EXTRA_ATTR` in the CONF_ANDROID block == 0 — met in substance,
+   with a caveat stated plainly.** The literal grep returns **2**, and both hits
+   are in the *explanatory comment* I added. No code in that block sets the bit:
+
+```
+=== every line mentioning EXTRA_ATTR in the CONF_ANDROID block ===
+  21:  * Stamping EXTRA_ATTR makes mkfs write block pointers at
+  32:  * PRJQUOTA implies EXTRA_ATTR.
+
+=== the only |= of EXTRA_ATTR left in the whole file ===
+188:  c.feature |= F2FS_FEATURE_EXTRA_ATTR;      <- inside #ifdef CONF_PROJID
+```
+
+Line 188 is inside `#ifdef CONF_PROJID`, which `Android.bp` defines **only** for
+the host-only `make_f2fs_casefold` binary (lines 194/197), never for the
+on-device `make_f2fs`. And even there, the post-getopt mask would strip it.
+I chose not to reword the comments purely to make a grep return zero — the
+explanation is worth more than the literal count, and a rebuild for a comment
+change would have invalidated the shipped hashes.
+
+**2. Both built fstabs list ext4 before f2fs — PASSED.** Identical in both, so
+recovery and ROM agree:
+
+```
+out/.../recovery/root/system/etc/recovery.fstab
+out/.../system/vendor/etc/fstab.samsungexynos7420
+  /cache ext4 ...
+  /cache f2fs ...
+  /data  ext4 ...
+  /data  f2fs ...
+```
+
+Also confirmed the entries are **consecutive per mount point**, which `fs_mgr`
+explicitly requires ("We required that fstab entries for the same mountpoint be
+consecutive", `mount_with_alternatives`, fs_mgr.cpp:945).
+
+**3. Kernel — all three backports landed, none skipped.** Proven from the *built*
+binary, not the source tree:
+
+```
+KERNEL_OBJ/.config:  CONFIG_F2FS_FS=y
+                     # CONFIG_F2FS_CHECK_FS is not set
+strings KERNEL_OBJ/arch/arm64/boot/Image:
+  "update_sit_entry: bad segno"    x1
+  "Wrong journal entry on segno"   x1
+  "Wrong checkpoint: node segno"   x1
+```
+
+(v2 baseline for comparison: `CONFIG_F2FS_CHECK_FS=y`, zero occurrences of all
+three strings.) The same strings are present in the built `recovery.img`.
+
+**4. ROM zip produced.**
+
+```
+lineage-21.0-20260803-UNOFFICIAL-zenlte.zip   893,769,353 B  (852.4 MiB)
+sha256: 05cc196a7c8ec42881cd8e59cb3fb18e7d0e33916aa26aae69f634b01a817da0
+```
+
+Note the `20260802`-named zip in `out/` is a **hardlink to the same inode** as the
+20260803 one (link count 3, with `lineage_zenlte-ota.zip`) — it is not a leftover
+v2 artifact. The real v2 zip is preserved in `artifacts/zenlte-v2/`.
+
+**5. TWRP image — PASSED on every sub-criterion.**
+
+```
+dt_size            = 190,464          (non-zero, taken from the v3 recovery.img)
+size               = 33,939,472 B     (< 35,651,584 limit)
+TWRP version       = 3.7.1_12-0       (parsed out of the packed ramdisk)
+kernel config      = CONFIG_F2FS_FS=y (extracted from the packed kernel itself)
+                     # CONFIG_F2FS_CHECK_FS is not set
+```
+
+The kernel and dt are taken from the **same** v3 `recovery.img`, so they cannot
+be mismatched. `repack_v3_hardened.sh` hard-fails on `dt_size=0`, on oversize,
+and on a kernel without `CONFIG_F2FS_FS=y`.
+
+**6. Odin tar — PASSED, structure verified rather than assumed.**
+
+```
+tar member       : recovery.img          (at archive root)
+trailing line    : 6df2249aa52eb79a656743ead33361f1  twrp-zenlte-v3-hardened-20260803.tar
+names the .tar   : True
+md5 recomputed over the tar payload matches: True
+```
+
+### Artifacts
+
+Saved locally to `/mnt/rom-data/artifacts/zenlte-v3/` with `SHA256SUMS.txt`:
+
+```
+05cc196a...  lineage-21.0-20260803-UNOFFICIAL-zenlte.zip   893,769,353 B
+6de641b1...  boot.img                                       24,809,488 B
+b6aa1591...  recovery.img                                   31,674,384 B
+4d8766c4...  recovery.tar.md5                               31,682,607 B
+8d0f9450...  twrp-zenlte-v3-hardened-20260803.img           33,939,472 B
+c751985f...  twrp-zenlte-v3-hardened-20260803.tar.md5       33,945,671 B
+```
+
+Log: `logs/build_20260803T022232Z.log`. Disk after build: 332 GB free.
+
+### Not done
+
+Nothing was flashed to any phone. **This build has not been boot-tested on
+hardware** — the fix is verified at source level and empirically at the formatter
+and kernel-binary level, but no one has run it on a device yet.

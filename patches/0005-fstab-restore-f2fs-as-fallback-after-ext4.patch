@@ -1,0 +1,66 @@
+From: zenlte local fix (v3)
+Subject: [PATCH] fstab: restore f2fs for /data and /cache, but as the SECOND choice
+
+Apply in: src/device/samsung/universal7420-common
+
+This supersedes the earlier (v2) approach, which deleted the f2fs lines
+outright; that patch is obsolete and is not shipped in this repo.  With the
+root cause now fixed in f2fs-tools (0002) and the kernel hardened (0006), f2fs
+is restored -- but ext4 is listed FIRST so it remains the default and f2fs is
+only the fallback.
+
+fs_mgr walks the fstab in order and uses the first entry matching a mount
+point, falling through only if that filesystem fails to mount.  Ordering ext4
+first therefore means: if anything about the f2fs fix is imperfect, users get
+ext4 and a working phone rather than a bootloop.  This is deliberate
+conservatism, not indecision.
+
+zenlte (SM-G928F) consumes the .noble variant -- BoardConfigCommon.mk:155 and
+ramdisk/Android.mk:6 both switch on a device filter that includes zenlte.  The
+same file feeds TARGET_RECOVERY_FSTAB and the /vendor/etc prebuilt, so recovery
+and the ROM stay in agreement.  .zero is dead code for this device and is kept
+in sync only for the zero-family devices.
+
+diff --git a/ramdisk/etc/fstab.samsungexynos7420.noble b/ramdisk/etc/fstab.samsungexynos7420.noble
+index f4d2b80..48aa45e 100644
+--- a/ramdisk/etc/fstab.samsungexynos7420.noble
++++ b/ramdisk/etc/fstab.samsungexynos7420.noble
+@@ -9,10 +9,16 @@
+ /dev/block/platform/15570000.ufs/by-name/SYSTEM           /system     ext4      ro,errors=panic,noload                                                                                         wait,recoveryonly
+ /dev/block/platform/15570000.ufs/by-name/CPEFS            /cpefs      ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,no_sehash_xattr,errors=panic    wait,check
+ /dev/block/platform/15570000.ufs/by-name/EFS              /efs        ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,no_sehash_xattr,errors=panic    wait,check,recoveryonly
+-/dev/block/platform/15570000.ufs/by-name/CACHE            /cache      f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check
++# ext4 is deliberately listed FIRST for /cache and /data so it is the default.
++# fs_mgr uses the first entry matching a mount point, and falls through to the
++# next one only if that filesystem does not mount. f2fs is kept as the fallback
++# rather than the default: the f2fs feature-bit fix (external/f2fs-tools) and
++# the kernel bounds checks are believed correct, but if either is imperfect the
++# user gets ext4 and a working phone instead of a bootloop.
+ /dev/block/platform/15570000.ufs/by-name/CACHE            /cache      ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,errors=panic                    wait,check
+-/dev/block/platform/15570000.ufs/by-name/USERDATA         /data       f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check,latemount,reservedsize=128M
++/dev/block/platform/15570000.ufs/by-name/CACHE            /cache      f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check
+ /dev/block/platform/15570000.ufs/by-name/USERDATA         /data       ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,errors=panic                    wait,check,latemount,reservedsize=128M
++/dev/block/platform/15570000.ufs/by-name/USERDATA         /data       f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check,latemount,reservedsize=128M
+ /dev/block/platform/15570000.ufs/by-name/OTA              /misc       emmc      defaults                                                                                                       defaults
+ 
+ # VOLD
+diff --git a/ramdisk/etc/fstab.samsungexynos7420.zero b/ramdisk/etc/fstab.samsungexynos7420.zero
+index eb91ff3..90d2fc8 100644
+--- a/ramdisk/etc/fstab.samsungexynos7420.zero
++++ b/ramdisk/etc/fstab.samsungexynos7420.zero
+@@ -8,10 +8,13 @@
+ /dev/block/platform/15570000.ufs/by-name/RECOVERY         /recovery   emmc      defaults                                                                                                       defaults
+ /dev/block/platform/15570000.ufs/by-name/SYSTEM           /system     ext4      ro,errors=panic,noload                                                                                         wait,recoveryonly
+ /dev/block/platform/15570000.ufs/by-name/EFS              /efs        ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,no_sehash_xattr,errors=panic    wait,check,recoveryonly
+-/dev/block/platform/15570000.ufs/by-name/CACHE            /cache      f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check
++# ext4 first, f2fs as fallback -- see the .noble variant for rationale.
++# (This file is dead code for zenlte, which takes the .noble branch; it is kept
++# in sync for the zero-family devices that do use it.)
+ /dev/block/platform/15570000.ufs/by-name/CACHE            /cache      ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,errors=panic                    wait,check
+-/dev/block/platform/15570000.ufs/by-name/USERDATA         /data       f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check,latemount,reservedsize=128M
++/dev/block/platform/15570000.ufs/by-name/CACHE            /cache      f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check
+ /dev/block/platform/15570000.ufs/by-name/USERDATA         /data       ext4      noatime,nosuid,nodev,noauto_da_alloc,discard,journal_async_commit,data=ordered,errors=panic                    wait,check,latemount,reservedsize=128M
++/dev/block/platform/15570000.ufs/by-name/USERDATA         /data       f2fs      rw,nosuid,nodev,noatime,nodiratime,inline_xattr                                                                wait,check,latemount,reservedsize=128M
+ /dev/block/platform/15570000.ufs/by-name/OTA              /misc       emmc      defaults                                                                                                       defaults
+ 
+ # VOLD

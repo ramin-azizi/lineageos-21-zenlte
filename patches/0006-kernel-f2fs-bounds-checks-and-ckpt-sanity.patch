@@ -1,0 +1,248 @@
+From: zenlte local fix (v3)
+Subject: [PATCH] f2fs: bounds-check SIT access and sanity-check the checkpoint
+
+Apply in: src/kernel/samsung/universal7420
+
+Goal: a corrupt or feature-incompatible f2fs filesystem must produce a clean
+mount failure or a logged refusal, never a kernel panic.  Three code changes
+plus one config change.
+
+1. update_sit_entry() -- THE MOST VALUABLE CHANGE, and the exact site of the
+   observed panic:
+       Unable to handle kernel paging request at ffffffc1022cfe80
+       PC is at update_sit_entry+0x68/0x354
+   GET_SEGNO() returns NULL_SEGNO for NULL_ADDR/NEW_ADDR and otherwise an
+   unvalidated value derived from an on-disk block address; get_seg_entry()
+   then indexes sentries[segno] with no bounds check at all.  Now returns
+   early on NULL_SEGNO and refuses (with SBI_NEED_FSCK) when segno is beyond
+   MAIN_SEGS.  Two of the four call sites already guarded the "old" address
+   this way; the unguarded "new" address is the path that panicked.
+
+2. sanity_check_ckpt() -- adaptation of upstream 15d3042a937c
+   "f2fs: sanity check checkpoint segno and blkoff" (CVE-2017-10663, fixed
+   upstream in 4.12.4), which was absent from this 3.10 tree.  Validates
+   cur_node_segno/blkoff and cur_data_segno/blkoff against the superblock.
+   Adapted, not applied blind: MAIN_SEGS()/SM_I() are unusable at this point
+   because the segment manager is not built until build_segment_manager(),
+   which runs AFTER get_valid_checkpoint() (this function's caller), so the
+   raw superblock segment_count_main is used instead.  sbi->blocks_per_seg is
+   already valid here because init_sb_info() runs before get_valid_checkpoint()
+   in f2fs_fill_super().
+
+3. build_sit_entries() -- in the spirit of upstream b2ca374f33bd
+   "f2fs: sanity check on sit entry".  A REAL, SEPARATE out-of-bounds bug
+   found while adapting it: the main SIT loop is bounded by
+   "start < MAIN_SEGS(sbi)", but the SIT-journal loop below took the segment
+   number straight from the on-disk journal and indexed sentries[] unchecked.
+   check_block_count() is too late -- the bad pointer is already formed and is
+   dereferenced by seg_info_from_raw_sit().  The function is changed from
+   void to int so the mount fails cleanly (-EINVAL); build_segment_manager()
+   already returns int and already uses this error pattern.
+
+4. CONFIG_F2FS_CHECK_FS=y -> not set (defconfig).
+   With CHECK_FS enabled, f2fs_bug_on() expands to a bare BUG_ON(), so f2fs
+   deliberately PANICS on any detected inconsistency -- which flatly
+   contradicts the goal above and would have kept panicking even with the
+   bounds checks in place (e.g. the new_vblocks assertion a few lines below
+   the fix in update_sit_entry, and check_block_count()).  With it off,
+   f2fs_bug_on() becomes WARN_ON() + set_sbi_flag(SBI_NEED_FSCK), which is the
+   upstream/AOSP production configuration.  Side benefit: drops the expensive
+   per-SIT-entry bitmap walk in check_block_count() at every mount.
+   This is a judgement call and is the single easiest change to revert if
+   undesired -- it is one line in
+   arch/arm64/configs/exynos7420-zenlte_defconfig.
+
+diff --git a/arch/arm64/configs/exynos7420-zenlte_defconfig b/arch/arm64/configs/exynos7420-zenlte_defconfig
+index 8a1488b9bc8..8350a883a33 100644
+--- a/arch/arm64/configs/exynos7420-zenlte_defconfig
++++ b/arch/arm64/configs/exynos7420-zenlte_defconfig
+@@ -4294,7 +4294,7 @@ CONFIG_F2FS_STAT_FS=y
+ CONFIG_F2FS_FS_XATTR=y
+ CONFIG_F2FS_FS_POSIX_ACL=y
+ CONFIG_F2FS_FS_SECURITY=y
+-CONFIG_F2FS_CHECK_FS=y
++# CONFIG_F2FS_CHECK_FS is not set
+ # CONFIG_F2FS_FS_ENCRYPTION is not set
+ # CONFIG_F2FS_FAULT_INJECTION is not set
+ CONFIG_NETWORK_FILESYSTEMS=y
+diff --git a/fs/f2fs/segment.c b/fs/f2fs/segment.c
+index b13338c8f36..12184696a5c 100644
+--- a/fs/f2fs/segment.c
++++ b/fs/f2fs/segment.c
+@@ -1475,6 +1475,42 @@ static void update_sit_entry(struct f2fs_sb_info *sbi, block_t blkaddr, int del)
+ 
+ 	segno = GET_SEGNO(sbi, blkaddr);
+ 
++	/*
++	 * zenlte hardening -- bounds-check before touching sentries[].
++	 *
++	 * GET_SEGNO() yields NULL_SEGNO for NULL_ADDR/NEW_ADDR, and otherwise
++	 * an entirely unvalidated value derived from an on-disk block address.
++	 * get_seg_entry() then does &sit_i->sentries[segno] with no bounds
++	 * check whatsoever, so a corrupt -- or merely feature-incompatible --
++	 * filesystem can index far past the end of the array.  Observed on
++	 * hardware when /data was formatted by a newer mkfs.f2fs that set the
++	 * EXTRA_ATTR feature bit this 3.10 kernel does not implement, which
++	 * made the kernel read inode metadata as block addresses:
++	 *
++	 *   Unable to handle kernel paging request at ffffffc1022cfe80
++	 *   PC is at update_sit_entry+0x68/0x354
++	 *   LR is at refresh_sit_entry+0x6c/0xe8
++	 *   ... allocate_data_block / f2fs_write_data_pages / write_checkpoint
++	 *
++	 * Two of the four call sites already guard the "old" address with
++	 * GET_SEGNO() != NULL_SEGNO; the "new" address is unguarded, which is
++	 * the path that panics.  Decline the update and flag the filesystem
++	 * for fsck rather than corrupting memory.  Block accounting may drift
++	 * on an already-broken filesystem, which is strictly preferable to an
++	 * unrecoverable bootloop.
++	 */
++	if (segno == NULL_SEGNO)
++		return;
++
++	if (unlikely(segno >= MAIN_SEGS(sbi))) {
++		f2fs_msg(sbi->sb, KERN_ERR,
++			"update_sit_entry: bad segno %u from blkaddr %u "
++			"(main_segs %u), please run fsck",
++			segno, blkaddr, MAIN_SEGS(sbi));
++		set_sbi_flag(sbi, SBI_NEED_FSCK);
++		return;
++	}
++
+ 	se = get_seg_entry(sbi, segno);
+ 	new_vblocks = se->valid_blocks + del;
+ 	offset = GET_BLKOFF_FROM_SEG0(sbi, blkaddr);
+@@ -3009,7 +3045,7 @@ static int build_curseg(struct f2fs_sb_info *sbi)
+ 	return restore_curseg_summaries(sbi);
+ }
+ 
+-static void build_sit_entries(struct f2fs_sb_info *sbi)
++static int build_sit_entries(struct f2fs_sb_info *sbi)
+ {
+ 	struct sit_info *sit_i = SIT_I(sbi);
+ 	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_COLD_DATA);
+@@ -3019,6 +3055,7 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
+ 	int sit_blk_cnt = SIT_BLK_CNT(sbi);
+ 	unsigned int i, start, end;
+ 	unsigned int readed, start_blk = 0;
++	int err = 0;
+ 
+ 	do {
+ 		readed = ra_meta_pages(sbi, start_blk, BIO_MAX_PAGES,
+@@ -3067,6 +3104,31 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
+ 		unsigned int old_valid_blocks;
+ 
+ 		start = le32_to_cpu(segno_in_journal(journal, i));
++
++		/*
++		 * zenlte hardening -- in the spirit of upstream
++		 * b2ca374f33bd "f2fs: sanity check on sit entry".
++		 *
++		 * The main SIT loop above is bounded by
++		 * "start < MAIN_SEGS(sbi)", but this journal loop takes the
++		 * segment number straight from the on-disk SIT journal and
++		 * indexes sentries[] with it unchecked -- an out-of-bounds
++		 * read/write driven entirely by filesystem contents.
++		 * check_block_count() below is too late: the bad pointer has
++		 * already been formed and is dereferenced by
++		 * seg_info_from_raw_sit().
++		 *
++		 * Fail the mount cleanly instead.
++		 */
++		if (unlikely(start >= MAIN_SEGS(sbi))) {
++			f2fs_msg(sbi->sb, KERN_ERR,
++				"Wrong journal entry on segno %u (main_segs %u), "
++				"please run fsck", start, MAIN_SEGS(sbi));
++			set_sbi_flag(sbi, SBI_NEED_FSCK);
++			err = -EINVAL;
++			break;
++		}
++
+ 		se = &sit_i->sentries[start];
+ 		sit = sit_in_journal(journal, i);
+ 
+@@ -3092,6 +3154,7 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
+ 				se->valid_blocks - old_valid_blocks;
+ 	}
+ 	up_read(&curseg->journal_rwsem);
++	return err;
+ }
+ 
+ static void init_free_segmap(struct f2fs_sb_info *sbi)
+@@ -3261,7 +3324,9 @@ int build_segment_manager(struct f2fs_sb_info *sbi)
+ 		return err;
+ 
+ 	/* reinit free segmap based on SIT */
+-	build_sit_entries(sbi);
++	err = build_sit_entries(sbi);
++	if (err)
++		return err;
+ 
+ 	init_free_segmap(sbi);
+ 	err = build_dirty_segmap(sbi);
+diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
+index 2bc2f0aa32b..325c4c613c9 100644
+--- a/fs/f2fs/super.c
++++ b/fs/f2fs/super.c
+@@ -1510,6 +1510,8 @@ int sanity_check_ckpt(struct f2fs_sb_info *sbi)
+ 	struct f2fs_super_block *raw_super = F2FS_RAW_SUPER(sbi);
+ 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
+ 	unsigned int ovp_segments, reserved_segments;
++	unsigned int main_segs, blocks_per_seg;
++	int i;
+ 
+ 	total = le32_to_cpu(raw_super->segment_count);
+ 	fsmeta = le32_to_cpu(raw_super->segment_count_ckpt);
+@@ -1531,6 +1533,52 @@ int sanity_check_ckpt(struct f2fs_sb_info *sbi)
+ 		return 1;
+ 	}
+ 
++	/*
++	 * zenlte hardening -- backport of upstream 15d3042a937c
++	 * "f2fs: sanity check checkpoint segno and blkoff" (CVE-2017-10663,
++	 * fixed upstream in 4.12.4), adapted to this 3.10 tree.
++	 *
++	 * The current-segment numbers and block offsets recorded in the
++	 * checkpoint are used directly to index sentries[] and to position
++	 * writes, but were never validated here.  A corrupt checkpoint could
++	 * therefore drive an out-of-bounds access long before any of the
++	 * later, deeper checks could notice.
++	 *
++	 * MAIN_SEGS()/SM_I() are not usable at this point -- the segment
++	 * manager is not built until build_segment_manager(), which runs after
++	 * get_valid_checkpoint() (the caller of this function).  Use the raw
++	 * superblock value instead, as upstream does.  sbi->blocks_per_seg is
++	 * already valid here because init_sb_info() runs before
++	 * get_valid_checkpoint() in f2fs_fill_super().
++	 */
++	main_segs = le32_to_cpu(raw_super->segment_count_main);
++	blocks_per_seg = sbi->blocks_per_seg;
++
++	for (i = 0; i < NR_CURSEG_NODE_TYPE; i++) {
++		if (le32_to_cpu(ckpt->cur_node_segno[i]) >= main_segs ||
++			le16_to_cpu(ckpt->cur_node_blkoff[i]) >= blocks_per_seg) {
++			f2fs_msg(sbi->sb, KERN_ERR,
++				"Wrong checkpoint: node segno[%d] %u >= %u or "
++				"blkoff %u >= %u", i,
++				le32_to_cpu(ckpt->cur_node_segno[i]), main_segs,
++				le16_to_cpu(ckpt->cur_node_blkoff[i]),
++				blocks_per_seg);
++			return 1;
++		}
++	}
++	for (i = 0; i < NR_CURSEG_DATA_TYPE; i++) {
++		if (le32_to_cpu(ckpt->cur_data_segno[i]) >= main_segs ||
++			le16_to_cpu(ckpt->cur_data_blkoff[i]) >= blocks_per_seg) {
++			f2fs_msg(sbi->sb, KERN_ERR,
++				"Wrong checkpoint: data segno[%d] %u >= %u or "
++				"blkoff %u >= %u", i,
++				le32_to_cpu(ckpt->cur_data_segno[i]), main_segs,
++				le16_to_cpu(ckpt->cur_data_blkoff[i]),
++				blocks_per_seg);
++			return 1;
++		}
++	}
++
+ 	if (unlikely(f2fs_cp_error(sbi))) {
+ 		f2fs_msg(sbi->sb, KERN_ERR, "A bug case: need to run fsck");
+ 		return 1;

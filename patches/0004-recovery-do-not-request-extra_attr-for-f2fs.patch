@@ -1,0 +1,30 @@
+From: zenlte local fix (v3)
+Subject: [PATCH] recovery: stop requesting extra_attr/project_quota when formatting f2fs
+
+Apply in: src/bootable/recovery
+
+Same bug as patch 0003, in the LineageOS recovery's own format_volume():
+"-O project_quota,extra_attr" was hardcoded.  Keeping recovery and fs_mgr in
+agreement matters -- otherwise recovery would format a filesystem the booted
+ROM cannot survive, which is precisely the class of mismatch that produced the
+original panic.
+
+diff --git a/recovery_utils/roots.cpp b/recovery_utils/roots.cpp
+index fc69df83..f97e5852 100644
+--- a/recovery_utils/roots.cpp
++++ b/recovery_utils/roots.cpp
+@@ -334,8 +334,12 @@ int format_volume(const std::string& volume, const std::string& directory,
+     "android",
+   };
+ 
+-  make_f2fs_cmd.push_back("-O");
+-  make_f2fs_cmd.push_back("project_quota,extra_attr");
++  // zenlte (Exynos7420) local change -- DEVICE SPECIFIC.
++  // Do not request extra_attr/project_quota: this device's 3.10 kernel has no
++  // i_extra_isize in struct f2fs_inode, so an extra_attr filesystem makes it
++  // read inode metadata as block addresses and panic in update_sit_entry().
++  // Keeping recovery and fs_mgr in agreement matters -- otherwise recovery
++  // would format a filesystem the booted ROM cannot survive.
+ 
+   if (needs_casefold) {
+     make_f2fs_cmd.push_back("-O");

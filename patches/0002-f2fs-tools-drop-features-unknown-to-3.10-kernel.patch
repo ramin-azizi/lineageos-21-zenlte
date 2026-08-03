@@ -1,0 +1,158 @@
+From: zenlte local fix (v3)
+Subject: [PATCH] f2fs-tools: never stamp feature bits the 3.10 kernel cannot parse
+
+Apply in: src/external/f2fs-tools
+
+ROOT CAUSE OF THE v1/v2 f2fs PANIC.
+
+f2fs-tools here is 1.16.0.  Its CONF_ANDROID default set ("make_f2fs -g android",
+which is exactly how fs_mgr and recovery invoke it) enabled:
+
+    ENCRYPT (0x0001)  - kernel knows this
+    QUOTA_INO (0x0080), PRJQUOTA (0x0010), EXTRA_ATTR (0x0008), VERITY (0x0400)
+                      - all UNKNOWN to this device's kernel
+
+The zenlte kernel is 3.10 and knows exactly two feature bits
+(kernel/samsung/universal7420/include/linux/f2fs_fs.h:112-113):
+    F2FS_FEATURE_ENCRYPT   0x0001
+    F2FS_FEATURE_BLKZONED  0x0002
+and its struct f2fs_inode is the pre-4.14 fixed layout with NO i_extra_isize.
+
+f2fs has no incompatible-feature gate, so the old kernel mounts the filesystem
+anyway.  With EXTRA_ATTR set, mkfs writes block pointers at
+i_addr[get_extra_isize()] while the kernel reads i_addr[0] -- so the kernel
+consumes inode metadata as block addresses.  Those garbage addresses reach
+update_sit_entry(), which indexes sit_i->sentries[segno] with no bounds check,
+~700x out of bounds -> kernel panic on the first fdatasync().
+
+Corroboration: the TWRP tree ships f2fs-tools 1.14.0, whose CONF_ANDROID does
+NOT set EXTRA_ATTR -- which is why TWRP-formatted f2fs worked and
+ROM-formatted f2fs did not.
+
+TWO changes here, and BOTH are required:
+
+  1. The CONF_ANDROID default set keeps only ENCRYPT.
+  2. An authoritative mask applied AFTER getopt and AFTER the defaults.
+     This second part is essential and is NOT optional: fs_mgr and recovery
+     both pass an explicit "-O project_quota,extra_attr" on the command line
+     (fs_mgr's needs_projid is a hardcoded `true`), so fixing the defaults
+     alone would have left the bug fully intact.
+
+DEVICE SPECIFIC: correct because this tree only ever builds zenlte.  On a
+multi-device tree this must be gated on the target kernel version.
+
+diff --git a/mkfs/f2fs_format_main.c b/mkfs/f2fs_format_main.c
+index f3316f7..42d7162 100644
+--- a/mkfs/f2fs_format_main.c
++++ b/mkfs/f2fs_format_main.c
+@@ -111,7 +111,9 @@ static void f2fs_show_info()
+ }
+ 
+ #if defined(ANDROID_TARGET) && defined(HAVE_SYS_UTSNAME_H)
+-static bool kernel_version_over(unsigned int min_major, unsigned int min_minor)
++/* zenlte: retained for reference, but unused -- see add_default_options() */
++static bool __attribute__((unused))
++kernel_version_over(unsigned int min_major, unsigned int min_minor)
+ {
+ 	unsigned int major, minor;
+ 	struct utsname uts;
+@@ -126,7 +128,8 @@ static bool kernel_version_over(unsigned int min_major, unsigned int min_minor)
+ 	return false;
+ }
+ #else
+-static bool kernel_version_over(unsigned int UNUSED(min_major),
++static bool __attribute__((unused))
++kernel_version_over(unsigned int UNUSED(min_major),
+ 				unsigned int UNUSED(min_minor))
+ {
+ 	return false;
+@@ -147,13 +150,32 @@ static void add_default_options(void)
+ 		if (c.feature & F2FS_FEATURE_RO)
+ 			return;
+ 
+-		/* -O encrypt -O project_quota,extra_attr,{quota} -O verity */
++		/*
++		 * zenlte (Exynos7420) local change -- DEVICE SPECIFIC.
++		 *
++		 * This tree only ever builds zenlte (SM-G928F), whose kernel
++		 * is 3.10 and whose f2fs understands exactly two feature
++		 * bits: ENCRYPT (0x1) and BLKZONED (0x2).  Its
++		 * struct f2fs_inode is the pre-4.14 fixed layout with no
++		 * i_extra_isize member.
++		 *
++		 * Stamping EXTRA_ATTR makes mkfs write block pointers at
++		 * i_addr[get_extra_isize()] while that kernel reads
++		 * i_addr[0], so the kernel interprets inode metadata as
++		 * block addresses.  Those garbage addresses reach
++		 * update_sit_entry(), which indexes sit_i->sentries[segno]
++		 * unchecked -> out-of-bounds access -> kernel panic.
++		 * f2fs has no incompatible-feature gate, so the old kernel
++		 * mounts the filesystem instead of refusing it.
++		 *
++		 * Only ENCRYPT is kept.  PRJQUOTA / QUOTA_INO / VERITY are
++		 * dropped as well: all are unknown to this kernel, and
++		 * PRJQUOTA implies EXTRA_ATTR.
++		 *
++		 * On a multi-device tree this MUST be gated on the target
++		 * kernel version rather than applied unconditionally.
++		 */
+ 		c.feature |= F2FS_FEATURE_ENCRYPT;
+-		if (!kernel_version_over(4, 14))
+-			c.feature |= F2FS_FEATURE_QUOTA_INO;
+-		c.feature |= F2FS_FEATURE_PRJQUOTA;
+-		c.feature |= F2FS_FEATURE_EXTRA_ATTR;
+-		c.feature |= F2FS_FEATURE_VERITY;
+ 		break;
+ 	}
+ #ifdef CONF_CASEFOLD
+@@ -316,6 +338,50 @@ static void f2fs_parse_options(int argc, char *argv[])
+ 
+ 	add_default_options();
+ 
++	/*
++	 * zenlte (Exynos7420) local change -- DEVICE SPECIFIC.
++	 *
++	 * Clearing the defaults in add_default_options() is NOT sufficient on
++	 * its own: both callers on this device ask for the killer feature
++	 * explicitly on the command line.
++	 *
++	 *   system/core/fs_mgr/fs_mgr_format.cpp   format_f2fs()
++	 *   bootable/recovery/recovery_utils/roots.cpp  format_volume()
++	 *
++	 * both hardcode "-O project_quota,extra_attr" (fs_mgr's needs_projid
++	 * is a hardcoded `true`), and getopt has already applied those bits
++	 * by the time we get here.
++	 *
++	 * This is therefore the single authoritative choke point -- it runs
++	 * after option parsing AND after the defaults, so it catches every
++	 * caller regardless of what they asked for.  Anything this device's
++	 * 3.10 kernel cannot parse gets masked off, which turns an
++	 * unmountable-but-mounted, panic-on-first-fdatasync filesystem into a
++	 * plain, correct, old-format f2fs.
++	 *
++	 * Kernel side of the contract (the only bits it knows):
++	 *   kernel/samsung/universal7420/include/linux/f2fs_fs.h:112-113
++	 *     F2FS_FEATURE_ENCRYPT   0x0001
++	 *     F2FS_FEATURE_BLKZONED  0x0002
++	 *
++	 * On a multi-device tree this MUST be gated on the target kernel.
++	 */
++	{
++		const uint32_t supported = F2FS_FEATURE_ENCRYPT |
++					   F2FS_FEATURE_BLKZONED;
++		uint32_t dropped = c.feature & ~supported;
++
++		if (dropped) {
++			MSG(0, "Info: zenlte: dropping f2fs feature bits 0x%04x "
++				"unsupported by this device's 3.10 kernel\n",
++				dropped);
++			c.feature &= supported;
++			c.quota_bits = 0;
++			c.s_encoding = 0;
++			c.s_encoding_flags = 0;
++		}
++	}
++
+ 	if (!(c.feature & F2FS_FEATURE_EXTRA_ATTR)) {
+ 		if (c.feature & F2FS_FEATURE_PRJQUOTA) {
+ 			MSG(0, "\tInfo: project quota feature should always be "
