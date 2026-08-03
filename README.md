@@ -36,14 +36,16 @@ was diagnosed at source level, and the fix was verified empirically rather than
 assumed: the on-disk superblock produced by the patched formatter was parsed and
 checked, and the compiled kernel was confirmed to contain the new bounds checks.
 
-**This build has since been flashed and booted on hardware** — an SM-G928F, on
-2026-08-03. It installs from TWRP and boots to a working Android 14; the boot
-reached MediaProvider and populated `/data/media`, which is well past the point
-where earlier builds kernel-panicked. That is the claim being made, and no more:
-**radio, camera, sensors and battery life have not been systematically tested**,
-and the build was booted on ext4 — the f2fs path is fixed and verified at the
-formatter and kernel-binary level, but has not been exercised end-to-end on a
-device. No OTA path is provided.
+**This build has since been flashed, booted and set up on hardware** — an
+SM-G928F, on 2026-08-03. It installs from TWRP, boots to a working Android 14,
+and has been taken through initial setup with **`NikGapps-basic` installed, the
+Play Store signed in, and apps downloaded and installed** — which also confirms
+the GApps sizing below empirically, not just from the superblock arithmetic.
+
+Still not claimed: **camera, sensors and battery life have not been
+systematically tested**, and the build was booted on **ext4** — the f2fs path is
+fixed and verified at the formatter and kernel-binary level, but has not been
+exercised end-to-end on a device. No OTA path is provided.
 
 No warranty. You are responsible for your own device.
 
