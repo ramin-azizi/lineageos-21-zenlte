@@ -59,6 +59,12 @@ root. Both forms are attached to the release.
 Heimdall users can flash `twrp-zenlte-v3-hardened-20260803.img` straight to the
 `RECOVERY` partition with no repacking.
 
+**TWRP survives the ROM install.** Checked rather than assumed: the zip's
+`updater-script` writes only `boot.img` to `BOOT` and never touches `RECOVERY`,
+and the build contains no `install-recovery.sh` / `recovery-from-boot.p`, so
+nothing restores a different recovery on first boot. The `recovery.img` inside
+the zip is carried for reference and is not flashed.
+
 ### If you prefer LineageOS Recovery
 
 `recovery.img` and `recovery.tar.md5` — the LineageOS recovery built from this
