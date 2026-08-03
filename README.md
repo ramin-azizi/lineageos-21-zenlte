@@ -164,24 +164,48 @@ The TWRP image here is built on this same hardened kernel with `CONFIG_F2FS_FS=y
 so TWRP can once again read and back up f2fs partitions — which the previous
 f2fs-free workaround recovery could not.
 
-### Known: MindTheGapps fails in TWRP with "error 1"
+### GApps: how much actually fits — and why MindTheGapps fails with "error 1"
 
-Reported on the earlier build: the **ROM itself installs fine in TWRP**, but
-`MindTheGapps-14-arm64` aborts with a generic error 1.
+**Correction.** An earlier version of this page ruled out disk space as the cause
+of the MindTheGapps "error 1" failure. **That was wrong**, and the mistake was
+comparing free space against the *compressed download size* instead of the
+installed payload. Measured properly:
 
-Ruled out as causes — measured, not guessed:
+| Package | Installed payload | Fits in 812 MiB? |
+|---|---|---|
+| `MindTheGapps-14.0.0-arm64` | **1025 MiB** | **no — short by 215 MiB** |
+| `NikGapps-full` / `NikGapps-stock` | ~2100 / ~1750 MiB | no, by a wide margin |
+| `NikGapps-omni` | **1048 MiB** | **no — short by 237 MiB** |
+| `NikGapps-basic` | **497 MiB** | **yes**, 314 MiB to spare |
+| `NikGapps-core` | ~266 MiB | yes |
 
-- **Not disk space.** `system.img` is created at the full
-  `BOARD_SYSTEMIMAGE_PARTITION_SIZE`, leaving roughly 820 MB free in `/system`.
-- **Not an architecture mismatch.** The build is `TARGET_ARCH=arm64`, Android 14,
-  SDK 34 — MindTheGapps 14 arm64 is correct.
+`/system` on this device is a fixed 3,124,019,200-byte partition. The ROM fills
+2.12 GiB of it, leaving **812 MiB** — measured from the ext4 superblock inside
+the built `system.img` (207,774 free 4 KiB blocks), not estimated.
 
-The likely cause is the recovery. This device has **no separate `product` or
-`system_ext` partition** — the fstab has only `SYSTEM`, and those are directories
-inside it. MindTheGapps for Android 13+ expects to mount and write those paths,
-and older TWRP builds frequently fail there. If you hit it, use `adb sideload`
-from LineageOS Recovery and read `/tmp/recovery.log` — the line *above* the abort
-is the useful one, and the log spans the whole session, so check timestamps
+MindTheGapps 14 needs 1025 MiB of that. **It cannot fit, and "error 1" is the
+expected result.** The device also has **no separate `product` or `system_ext`
+partition** — the fstab has only `SYSTEM`, and those are directories inside it —
+which is a genuine second obstacle for MindTheGapps on Android 13+, but the space
+shortfall alone is sufficient to explain the failure.
+
+**Use `NikGapps-basic` (or `core`).** They are the variants that fit. Google apps
+must be installed in the same recovery session as the ROM, before first boot.
+
+To check any package yourself before flashing it, compare its *uncompressed*
+payload — not the download size — against 812 MiB:
+
+```bash
+# NikGapps: payloads are nested zips under AppSet/
+unzip -q NikGapps-*.zip 'AppSet/*' -d /tmp/ng
+for z in $(find /tmp/ng -name '*.zip'); do unzip -l "$z" | tail -1; done | awk '{s+=$1} END{printf "%.0f MiB\n", s/2^20}'
+
+# MindTheGapps: a plain system/ tree
+unzip -l MindTheGapps-*.zip | awk '$4 ~ /^system\// {s+=$1} END {printf "%.0f MiB\n", s/2^20}'
+```
+
+If a GApps install does fail, read `/tmp/recovery.log` — the line *above* the
+abort is the useful one, and the log spans the whole session, so check timestamps
 before blaming the most recent error you see.
 
 ## Building it yourself
