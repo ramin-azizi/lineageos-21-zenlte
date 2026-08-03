@@ -14,7 +14,16 @@ sha256: c751985f11232d0caf4ef49430df8b95e4b2988e16f56a52784a08fa2d50f457
 lineage-21.0-20260803-UNOFFICIAL-zenlte.zip  <- then install this in TWRP
 852.4 MiB (893,769,353 bytes)
 sha256: 05cc196a7c8ec42881cd8e59cb3fb18e7d0e33916aa26aae69f634b01a817da0
+
+NikGapps-basic-arm64-14                      <- then this, same TWRP session,
+not hosted here - get it from nikgapps.com      before the first boot
 ```
+
+Three files, in that order: **TWRP in Odin → ROM in TWRP → GApps in TWRP.**
+GApps are not redistributed here; download `NikGapps-basic` (arm64, Android 14)
+from [nikgapps.com](https://nikgapps.com/). **Do not substitute MindTheGapps** —
+it does not fit on this device. The [sizing table](#gapps-how-much-actually-fits--and-why-mindthegapps-fails-with-error-1)
+explains why.
 
 ## ⚠️ Read this first
 
@@ -26,9 +35,15 @@ do not wipe your only way back until this has booted successfully for you.
 was diagnosed at source level, and the fix was verified empirically rather than
 assumed: the on-disk superblock produced by the patched formatter was parsed and
 checked, and the compiled kernel was confirmed to contain the new bounds checks.
-**But this specific build has not been flashed or booted on hardware by its
-author.** The previous build in this series installed successfully via TWRP;
-boot, radio, camera and sensors remain unconfirmed. No OTA path is provided.
+
+**This build has since been flashed and booted on hardware** — an SM-G928F, on
+2026-08-03. It installs from TWRP and boots to a working Android 14; the boot
+reached MediaProvider and populated `/data/media`, which is well past the point
+where earlier builds kernel-panicked. That is the claim being made, and no more:
+**radio, camera, sensors and battery life have not been systematically tested**,
+and the build was booted on ext4 — the f2fs path is fixed and verified at the
+formatter and kernel-binary level, but has not been exercised end-to-end on a
+device. No OTA path is provided.
 
 No warranty. You are responsible for your own device.
 
@@ -50,11 +65,22 @@ root. Both forms are attached to the release.
    own recovery on boot and you will lose TWRP.*
 5. In TWRP: **Wipe → Format Data** (the full format, not just "wipe"), then
    **Wipe → Advanced** and tick Dalvik, Cache, System.
-6. Install `lineage-21.0-20260803-UNOFFICIAL-zenlte.zip`.
-7. If you want Google apps, flash them **in the same session, before first boot** —
-   retrofitting later means starting over. See
-   [MindTheGapps_Legacy](https://github.com/samsungexynos7420/MindTheGapps_Legacy).
-8. Reboot to system. **First boot can take several minutes.** Be patient.
+6. **Now** copy the ROM zip and your GApps zip onto the phone — MTP over USB, a
+   USB-OTG stick, or `adb push <file> /sdcard/` from TWRP. Do it in this order:
+   the S6 Edge+ has **no microSD slot**, so "internal storage" is a folder on
+   `/data`, and Format Data in step 5 erases anything you staged there first.
+7. Install `lineage-21.0-20260803-UNOFFICIAL-zenlte.zip`.
+8. If you want Google apps, flash them **in the same session, before first boot** —
+   retrofitting later means starting over. Use **`NikGapps-basic`** (arm64, 14)
+   or `NikGapps-core`; **MindTheGapps 14 does not fit on this device** and fails
+   with a generic "error 1". See [the sizing table](#gapps-how-much-actually-fits--and-why-mindthegapps-fails-with-error-1)
+   before you pick a package — this is the single most common way an install of
+   this ROM goes wrong.
+9. Reboot to system. **First boot can take several minutes.** Be patient.
+
+The TWRP you flashed in step 3 is enough for all of this. The v3 hardened image
+is only *needed* if you intend to use f2fs; an earlier TWRP build for this device
+installs this ROM fine.
 
 Heimdall users can flash `twrp-zenlte-v3-hardened-20260803.img` straight to the
 `RECOVERY` partition with no repacking.
