@@ -4,20 +4,47 @@ An **unofficial** build of LineageOS 21.0 for the Galaxy S6 Edge+ (`zenlte`,
 Exynos 7420), plus a matching TWRP recovery and the fixes needed to reproduce
 both.
 
-Built 2026-08-03. Download from the [Releases](../../releases) page.
+Current build **v5, 2026-08-05** — signed with a private release key, plus
+curved-edge grip rejection. Download from the [Releases](../../releases) page.
 
 ```
 twrp-zenlte-v3-hardened-20260803.tar.md5     <- flash this in Odin first
-32.4 MiB (33,945,671 bytes)
+32.4 MiB (33,945,671 bytes)                     (unchanged since v3)
 sha256: c751985f11232d0caf4ef49430df8b95e4b2988e16f56a52784a08fa2d50f457
 
-lineage-21.0-20260803-UNOFFICIAL-zenlte.zip  <- then install this in TWRP
-852.4 MiB (893,769,353 bytes)
-sha256: 05cc196a7c8ec42881cd8e59cb3fb18e7d0e33916aa26aae69f634b01a817da0
+lineage-21.0-20260805-UNOFFICIAL-zenlte.zip  <- then install this in TWRP
+851.6 MiB (892,946,400 bytes)
+sha256: e7fbd4242b0100673292a58a6dbbc31a41925ccf88b9af1e95782ab0b546d67c
 
 NikGapps-basic-arm64-14                      <- then this, same TWRP session,
 not hosted here - get it from nikgapps.com      before the first boot
 ```
+
+**v4 (2026-08-04)** is also published: identical to v5 but without the edge
+change. Same signing key, so you can dirty-flash between v4 and v5 with no
+Format Data and no data loss — that is the escape hatch if the edge dead zone
+does not suit you.
+
+```
+lineage-21.0-20260804-UNOFFICIAL-zenlte.zip
+851.6 MiB (892,939,202 bytes)
+sha256: 214d8e0f34b3ea16779fa88a0e907a1f363194aa238eb2aa14dc43105e064f82
+```
+
+> ### ⚠️ Coming from v3 or earlier? You must Format Data
+>
+> v4/v5 are signed with a different key than v3, so PackageManager sees a
+> signature mismatch on every system app. A dirty flash will not boot.
+>
+> **This phone has no SD slot**, so Format Data erases the only storage you have
+> — the ROM and GApps zips included. Nothing survives it. Either copy the zips
+> back on afterwards over MTP/adb, or push them from TWRP at flash time
+> (`adb push`, then `adb shell twrp install …`), which is the more reliable
+> habit: files kept on internal storage die with every Format Data.
+>
+> Note that **Format Data is not the same as Wipe → Factory Reset.** Factory
+> Reset preserves `/data/media` (internal storage); Format Data does not. Here
+> you need Format Data.
 
 Three files, in that order: **TWRP in Odin → ROM in TWRP → GApps in TWRP.**
 GApps are not redistributed here; download `NikGapps-basic` (arm64, Android 14)
@@ -265,6 +292,140 @@ unzip -l MindTheGapps-*.zip | awk '$4 ~ /^system\// {s+=$1} END {printf "%.0f Mi
 If a GApps install does fail, read `/tmp/recovery.log` — the line *above* the
 abort is the useful one, and the log spans the whole session, so check timestamps
 before blaming the most recent error you see.
+
+## What changed in v4 and v5
+
+### v4 — signed with a private release key
+
+v3 and earlier were `test-keys` builds, so LineageOS Trust showed the
+"public key" warning. v4 and v5 are signed with a generated release key:
+
+```make
+# vendor/lineage-priv/keys/keys.mk
+PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/lineage-priv/keys/releasekey
+```
+
+Setting that flips `ro.build.tags` from `test-keys` to `dev-keys` automatically
+(`build/make/core/sysprop.mk`), which is what clears the warning. No
+`sign_target_files_apks` post-processing step is needed for this tree, and this
+board has `BOARD_AVB_ENABLE := false`, so there is no vbmeta/verity key.
+
+Two things that are easy to get wrong:
+
+**The keys must live inside the tree.** Soong resolves `certificate: "platform"`
+against `DefaultAppCertificateDir()`, which is `dirname(PRODUCT_DEFAULT_DEV_CERTIFICATE)`
+resolved with `PathForSource()`. An absolute path outside the source tree does
+not work.
+
+**You need nine keys, including one called `testkey`.**
+`system/sepolicy/build/soong/mac_permissions.go` has
+
+```go
+AllPlatformKeys = []string{"platform","sdk_sandbox","media",
+                           "networkstack","shared","testkey","bluetooth"}
+```
+
+and joins each to the default cert dir. Miss `testkey` and the build dies at
+**ninja time** on `plat_mac_permissions.xml`, not at Soong analysis time — so
+`m nothing` will not catch it, and you find out an hour in. Generating a key
+file named `testkey` does **not** make this a test-keys build; `ro.build.tags`
+follows `releasekey`.
+
+Also note `make_key` installs `trap '…; exit 1' EXIT` and never clears it, so it
+returns 1 even on success. Do not run a key-generation loop under `set -e`.
+
+**What signing does not fix:** the SELinux warning below, and Play Integrity.
+
+### v5 — curved-edge grip rejection
+
+The curved edges on this phone are easy to catch with a palm or thumb. The STM
+`fts5ad56` touch controller has a firmware dead-zone feature for exactly this,
+and the ROM never enabled it — the sysfs entry is even permissioned for it in
+`init.samsung.rc`, but nothing ever writes to it.
+
+v5 enables it in the driver
+(`drivers/input/touchscreen/stm/fts5ad56/fts_ts.c`):
+
+```c
+regAdd[0] = 0xC4;  regAdd[1] = 0x03;  /* set_dead_zone, side edge all on */
+regAdd[0] = 0xC2;  regAdd[1] = 0x0C;  /* dead zone enable */
+```
+
+Register polarity was read out of `dead_zone_enable()` in `fts_sec.c` — `0xC2`
+is inverted relative to `fts_enable_feature()`, which is a trap if you assume
+consistency.
+
+It is applied in **both** `fts_init()` and `fts_reinit()`. The second one is
+load-bearing: `fts_reinit()` issues a system reset on every resume and restores
+only the cover and glove settings, so without a hook there the dead zone would
+silently vanish the first time the screen turned off.
+
+The band is Samsung's own ~160 px per side. If it rejects touches you actually
+wanted, turn it off at runtime with root:
+
+```sh
+echo dead_zone_enable,0 > /sys/class/sec/tsp/cmd
+```
+
+or dirty-flash v4, which has no edge change and the same signing key.
+
+### SELinux ships Permissive, and it is not a one-line fix
+
+`exynos7420-zenlte_defconfig` sets `CONFIG_SECURITY_SELINUX_PERMISSIVE=y`, which
+hardcodes `new_value = 0` in `sel_write_enforce()`. The kernel command line says
+`androidboot.selinux=enforcing` and `getenforce` still reports `Permissive` —
+the cmdline cannot win against that config.
+
+This was audited on hardware before deciding, not guessed:
+
+```
+443  unique denial tuples          (a manageable port is < ~50)
+ 98  denials in core domains       (init, zygote, apexd, netd, logd,
+                                    system_server, surfaceflinger, bpfloader,
+                                    vold_prepare_subdirs, kernel, vendor_init)
+ 76  distinct source domains
+458  denials from odrefresh alone
+```
+
+Upstream set this deliberately — commit `3a373b4fd6b6`, *"defconfigs: set to
+permissive / sepolicy is not ready"*. Flipping the defconfig without writing the
+policy to match would produce a device that does not boot. It was left as-is.
+
+Consequence: Trust still shows the SELinux warning, and Play Integrity will
+fail. The warning can be silenced from the notification's Manage button.
+
+### Xposed: LSPosed does not work on this build — use Vector
+
+LSPosed 1.9.2 (the final release of the abandoned original project) fails to
+initialise here. Its manager will not open from its notification, and no module
+is ever hooked. `/data/adb/lspd/log/verbose_*.log` shows:
+
+```
+E/LSPlant   Failed to find GetMethodShorty
+E/LSPlant   Failed to init art method
+E/LSPosed   Failed to init lsplant
+```
+
+`libart.so` from this ROM, read with `readelf --syms --dyn-syms`:
+
+```
+2,622  dynamic symbols             -> not stripped
+   93  ArtMethod symbols           -> richly symbolled
+    0  symbols containing "Shorty" -> searched .symtab AND .dynsym
+```
+
+`ArtMethod::GetShorty()` is defined inline in `art_method-inl.h`; fully inlined
+here, so no out-of-line copy and no symbol. LSPlant resolves it by mangled name
+and cannot start without it.
+
+LSPosed's "supports Android 8.1 ~ 14" claim does not help, because LSPlant binds
+to **ART internals by mangled C++ symbol**, not to the API level — and ART ships
+as an updatable APEX (`com.android.art`), so two devices can both be Android 14
+with different ART binaries. This ROM reports `com.android.art@350090000`.
+
+Use [JingMatrix/Vector](https://github.com/JingMatrix/Vector) instead — the
+maintained successor, built on a current LSPlant, supporting Android 8.1
+through 17. Requires Magisk with Zygisk enabled (tested with Magisk 30.7).
 
 ## Building it yourself
 

@@ -1,6 +1,23 @@
+# v5 (2026-08-05) -- signed + curved-edge grip rejection. CURRENT.
+e7fbd4242b0100673292a58a6dbbc31a41925ccf88b9af1e95782ab0b546d67c  lineage-21.0-20260805-UNOFFICIAL-zenlte.zip
+7ae2e0458dbac2859cbcac8e75f88c3fa1a5181345780d213ef8fb0d9fe75b0c  boot.img
+039ffb554384e64d1a50063a84fce285e82850886b1e5e4039261fccde0b6fda  recovery.img
+
+# v4 (2026-08-04) -- signed, no edge change. Same key as v5, so v4 <-> v5 is a
+# dirty flash: no Format Data, no data loss.
+214d8e0f34b3ea16779fa88a0e907a1f363194aa238eb2aa14dc43105e064f82  lineage-21.0-20260804-UNOFFICIAL-zenlte.zip
+c891e26bee54197c1607c685cdaa54efe842fbae9d78b6b88ff5b165610e50a2  boot.img
+e49a9af4cb95d6f2968aa326fbb11bb0df411924349324c30a6081e206f4cd1d  recovery.img
+
+# TWRP -- unchanged since v3, still current. Flash in Odin.
+# NOTE: an earlier same-day build, twrp-zenlte-FIXED-20260803.img, is byte-for-byte
+# the SAME SIZE (33,939,472) but a DIFFERENT binary (a9dbb73f...). Both self-report
+# TWRP 3.7.1_12-0, so size and version cannot tell them apart. Check the hash.
+8d0f945021c1d6cf60d1ba49c0e39c1663126745f9ff1b3b341cdd78b4a5fc3d  twrp-zenlte-v3-hardened-20260803.img
+c751985f11232d0caf4ef49430df8b95e4b2988e16f56a52784a08fa2d50f457  twrp-zenlte-v3-hardened-20260803.tar.md5
+
+# v3 (2026-08-03) -- test-keys, superseded. Upgrading from this REQUIRES Format Data.
 05cc196a7c8ec42881cd8e59cb3fb18e7d0e33916aa26aae69f634b01a817da0  lineage-21.0-20260803-UNOFFICIAL-zenlte.zip
 6de641b1661873826223fe37467c4068321c48507a738920e885175ea7f54093  boot.img
 b6aa1591813fa2c037f6edab0e6d57ca73d075db9fa6744dd41b57413a057699  recovery.img
 4d8766c412574fced59b17f2bc1c29a6e33b8ad2f0632f648cbf2670ef232e63  recovery.tar.md5
-8d0f945021c1d6cf60d1ba49c0e39c1663126745f9ff1b3b341cdd78b4a5fc3d  twrp-zenlte-v3-hardened-20260803.img
-c751985f11232d0caf4ef49430df8b95e4b2988e16f56a52784a08fa2d50f457  twrp-zenlte-v3-hardened-20260803.tar.md5
