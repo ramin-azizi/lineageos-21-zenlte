@@ -425,7 +425,12 @@ with different ART binaries. This ROM reports `com.android.art@350090000`.
 
 Use [JingMatrix/Vector](https://github.com/JingMatrix/Vector) instead — the
 maintained successor, built on a current LSPlant, supporting Android 8.1
-through 17. Requires Magisk with Zygisk enabled (tested with Magisk 30.7).
+through 17. Requires Magisk with Zygisk enabled.
+
+**Confirmed working on this ROM** (Vector v2.2 build 3080, Magisk 30.7,
+2026-08-08). Install it as a Magisk module and remove the old `zygisk_lsposed`
+module first — two Xposed frameworks conflict. Modules must be re-enabled in
+Vector's manager afterwards.
 
 ## Building it yourself
 
